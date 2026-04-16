@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# ChromaDB local store
+chroma_db/
+*.chroma
+
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.log
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Uploads (we'll store raw content in DB, but just in case)
+uploads/

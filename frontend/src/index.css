@@ -1,0 +1,9 @@
+/* Tailwind v3 entry directives.
+   PostCSS (via vite's built-in support) reads these and expands them into:
+     - @tailwind base      → normalises browser defaults (like a CSS reset)
+     - @tailwind components → any @layer components{} blocks
+     - @tailwind utilities  → every utility class you actually used (tree-shaken)
+*/
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

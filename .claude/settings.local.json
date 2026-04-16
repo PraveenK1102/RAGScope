@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pandoc --track-changes=all \"/Users/praveen-16349/Downloads/RAGScope_Build_Plan_4.docx\" -o /tmp/ragscope_plan.md)",
+      "Read(//tmp/**)",
+      "Bash(python3 \"/Users/praveen-16349/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/69fae1c3-4c19-44ed-960f-8a3f6f538fcc/8195f980-acd3-473b-8630-6f098523b14b/skills/docx/scripts/office/unpack.py\" \"/Users/praveen-16349/Downloads/RAGScope_Build_Plan_4.docx\" /tmp/ragscope_unpacked/)",
+      "Read(//private/tmp/**)",
+      "Bash(mkdir -p ragscope_unpacked)",
+      "Bash(unzip -o \"/Users/praveen-16349/Downloads/RAGScope_Build_Plan_4.docx\" -d /tmp/ragscope_unpacked/)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(.venv/bin/python --version)",
+      "Bash(.venv/bin/pip install:*)",
+      "WebFetch(domain:www.figma.com)",
+      "Bash(ls ~/.claude/mcp*)",
+      "mcp__figma__get_design_context",
+      "mcp__figma__whoami",
+      "Bash(npm install:*)",
+      "Bash(npx tailwindcss:*)",
+      "Bash(timeout 15 npm run dev)",
+      "Bash(npm uninstall:*)",
+      "Bash(./node_modules/.bin/tailwindcss init:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
