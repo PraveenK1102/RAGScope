@@ -17,12 +17,13 @@
 
 import { useState } from "react";
 
+import ChunksTab from "./components/ChunksTab";
 import ConfigsTab from "./components/ConfigsTab";
 import DocumentsTab from "./components/DocumentsTab";
 
 // Tab identifiers — a union type is better than a raw string so typos are
 // caught at compile time rather than at runtime.
-type Tab = "documents" | "configs";
+type Tab = "documents" | "configs" | "chunks";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("documents");
@@ -56,6 +57,11 @@ export default function App() {
               active={activeTab === "configs"}
               onClick={() => setActiveTab("configs")}
             />
+            <TabButton
+              label="Chunks"
+              active={activeTab === "chunks"}
+              onClick={() => setActiveTab("chunks")}
+            />
           </nav>
         </div>
       </header>
@@ -63,9 +69,18 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
       {/* Main content                                                         */}
       {/* ------------------------------------------------------------------ */}
-      <main className="max-w-4xl mx-auto px-6 py-8">
+      {/* Chunks tab can compare up to 3 configs side-by-side, so it needs the
+          full viewport width. Documents/Configs tabs are list views and read
+          better constrained. */}
+      <main
+        className={[
+          "mx-auto px-6 py-8",
+          activeTab === "chunks" ? "max-w-[1600px]" : "max-w-4xl",
+        ].join(" ")}
+      >
         {activeTab === "documents" && <DocumentsTab />}
         {activeTab === "configs" && <ConfigsTab />}
+        {activeTab === "chunks" && <ChunksTab />}
       </main>
     </div>
   );

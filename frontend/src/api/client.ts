@@ -38,6 +38,11 @@ export interface Document {
   uploaded_at: string; // ISO-8601 string; convert with new Date(doc.uploaded_at)
 }
 
+/** A Document plus its full extracted text — for the source-doc viewer. */
+export interface DocumentDetail extends Document {
+  content: string;
+}
+
 export type ChunkStrategy = "fixed" | "recursive" | "semantic";
 export type EmbeddingModel = "ollama-nomic-embed-text" | "all-MiniLM-L6-v2";
 export type RetrievalMode = "vector" | "bm25" | "hybrid";
@@ -71,6 +76,11 @@ export interface ConfigCreate {
 /** Fetch the list of all uploaded documents (newest first). */
 export async function listDocuments(): Promise<Document[]> {
   return apiFetch<Document[]>("/api/documents");
+}
+
+/** Fetch a single document with its full extracted text. */
+export async function getDocument(id: number): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(`/api/documents/${id}`);
 }
 
 /**
@@ -114,4 +124,39 @@ export async function createConfig(payload: ConfigCreate): Promise<Config> {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Chunks API
+// ---------------------------------------------------------------------------
+
+export interface Chunk {
+  chunk_index: number;
+  content: string;
+  start_char: number;
+  end_char: number;
+  char_count: number;
+}
+
+export interface ChunksResponse {
+  document_id: number;
+  config_id: number;
+  strategy_used: ChunkStrategy;
+  total_chunks: number;
+  avg_char_count: number;
+  chunks: Chunk[];
+}
+
+/**
+ * Fetch chunks for a given (document, config) pair.
+ *
+ * Backend is lazy: first call for a pair runs the chunker and persists the
+ * rows, so it may take several seconds (especially for the semantic strategy,
+ * which loads a local embedding model). Subsequent calls are DB cache hits.
+ */
+export async function fetchChunks(
+  documentId: number,
+  configId: number,
+): Promise<ChunksResponse> {
+  return apiFetch<ChunksResponse>(`/api/chunks/${documentId}/${configId}`);
 }

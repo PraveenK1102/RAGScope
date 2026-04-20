@@ -7,9 +7,14 @@ python-multipart   # required by FastAPI for multipart/form-data (file uploads)
 pypdf              # PDF text extraction
 python-dotenv      # .env loading (we'll use it from Week 4 for LLM API keys)
 
+# Week 2: chunking engine
+langchain-text-splitters   # RecursiveCharacterTextSplitter
+langchain-experimental     # SemanticChunker
+langchain-huggingface      # HuggingFaceEmbeddings wrapper for SemanticChunker
+sentence-transformers      # local MiniLM model (used by HuggingFaceEmbeddings)
+
 # Later weeks will add:
-#   Week 2: langchain-text-splitters
-#   Week 3: chromadb, sentence-transformers, ollama
+#   Week 3: chromadb, ollama
 #   Week 4: google-generativeai, requests  (Gemini + Grok)
 #   Week 6: rank_bm25
 #   Week 7: ragas, datasets

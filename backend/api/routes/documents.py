@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # (where it'd be huge) without changing the DB.
 # ---------------------------------------------------------------------------
 class DocumentRead(BaseModel):
-    """Returned for a single document upload or individual fetch."""
+    """List/upload response — omits the large content field."""
 
     id: int
     filename: str
@@ -47,6 +47,16 @@ class DocumentRead(BaseModel):
     # we hand a SQLAlchemy Document straight to FastAPI and have it
     # serialise correctly.
     model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentDetail(DocumentRead):
+    """Single-document fetch — includes the full extracted text.
+
+    Used by the chunk viewer's "Source document" panel to render the raw
+    text with per-chunk highlighting overlays.
+    """
+
+    content: str
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +140,18 @@ async def list_documents(db: Session = Depends(get_db)) -> list[Document]:
         .order_by(Document.uploaded_at.desc())
         .all()
     )
+
+
+@router.get(
+    "/{document_id}",
+    response_model=DocumentDetail,
+    summary="Fetch one document by id, including the extracted text",
+)
+async def get_document(document_id: int, db: Session = Depends(get_db)) -> Document:
+    doc = db.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+    return doc

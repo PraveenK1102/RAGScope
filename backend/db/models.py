@@ -16,7 +16,17 @@ Models are added incrementally:
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.db.database import Base
@@ -123,4 +133,41 @@ class Config(Base):
         return (
             f"<Config id={self.id} name={self.name!r} "
             f"strategy={self.chunk_strategy.value} model={self.embedding_model.value}>"
+        )
+
+
+class Chunk(Base):
+    """A single chunk of a Document, produced under a specific Config.
+
+    The same Document chunked with two different Configs produces two disjoint
+    sets of rows — we keep (document_id, config_id) as a composite identity so
+    switching strategies never mutates existing chunks.
+
+    `embedding` stays NULL until Week 3 (embedder fills it in).
+    """
+
+    __tablename__ = "chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id"), nullable=False, index=True
+    )
+    config_id: Mapped[int] = mapped_column(
+        ForeignKey("configs.id"), nullable=False, index=True
+    )
+
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_char: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_char: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Populated in Week 3 by the embedder. Stored as raw bytes (float32 array
+    # serialised) — ChromaDB is the real vector store, this is a cached copy
+    # so we can rebuild a collection without re-embedding.
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<Chunk id={self.id} doc={self.document_id} cfg={self.config_id} "
+            f"idx={self.chunk_index} chars={self.start_char}-{self.end_char}>"
         )
