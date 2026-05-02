@@ -144,6 +144,8 @@ export interface ChunksResponse {
   strategy_used: ChunkStrategy;
   total_chunks: number;
   avg_char_count: number;
+  /** How many chunks already have embedding bytes in SQLite. 0 = not built; total_chunks = fully built. */
+  embedded_count: number;
   chunks: Chunk[];
 }
 
@@ -159,4 +161,40 @@ export async function fetchChunks(
   configId: number,
 ): Promise<ChunksResponse> {
   return apiFetch<ChunksResponse>(`/api/chunks/${documentId}/${configId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Embeddings API
+// ---------------------------------------------------------------------------
+
+export interface BuildEmbeddingsResponse {
+  document_id: number;
+  config_id: number;
+  embedding_model: EmbeddingModel;
+  dimension: number;
+  chunks_embedded: number;
+  /** Name of the per-config Chroma collection that was populated. */
+  collection: string;
+}
+
+/**
+ * Embed every chunk of a (document, config) pair, persist the vectors into
+ * Chroma, and cache the raw bytes back onto chunks.embedding in SQLite.
+ *
+ * Side-effects, not just a fetch — surfaces:
+ *   - 404 if document or config doesn't exist
+ *   - 409 if no chunks exist for this pair (load chunks first)
+ *   - 503 if the chosen backend is unreachable (e.g. Ollama down)
+ *
+ * Synchronous on the wire — the POST blocks until embedding is fully done.
+ * MiniLM is sub-second after the first warm-up; Ollama is similar.
+ */
+export async function buildEmbeddings(
+  documentId: number,
+  configId: number,
+): Promise<BuildEmbeddingsResponse> {
+  return apiFetch<BuildEmbeddingsResponse>(
+    `/api/embeddings/${documentId}/${configId}/build`,
+    { method: "POST" },
+  );
 }

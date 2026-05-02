@@ -13,8 +13,11 @@ langchain-experimental     # SemanticChunker
 langchain-huggingface      # HuggingFaceEmbeddings wrapper for SemanticChunker
 sentence-transformers      # local MiniLM model (used by HuggingFaceEmbeddings)
 
+# Week 3: embedder + vector store
+chromadb                   # local persistent vector DB
+ollama                     # thin Python client for the local Ollama HTTP server
+
 # Later weeks will add:
-#   Week 3: chromadb, ollama
 #   Week 4: google-generativeai, requests  (Gemini + Grok)
 #   Week 6: rank_bm25
 #   Week 7: ragas, datasets

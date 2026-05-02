@@ -21,6 +21,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  buildEmbeddings,
   fetchChunks,
   getDocument,
   listConfigs,
@@ -34,12 +35,25 @@ import {
 
 const MAX_SELECTED_CONFIGS = 3;
 
+// Per-column embedding state. Discriminated union → exhaustive switch in
+// EmbedActionRow, no "what if status is X but error is also set" ambiguity.
+//   idle    — chunks exist but no embeddings yet (show "Build" button)
+//   loading — POST in flight (show spinner)
+//   success — embeddings persisted (show "✓ embedded" + "Rebuild" link)
+//   error   — last attempt failed (show message + retry)
+type EmbedState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success" }
+  | { status: "error"; error: string };
+
 // Result of a single fetch, bundled with the source config so the column
 // header can render its name regardless of whether the fetch succeeded.
 type ColumnResult = {
   config: Config;
   data: ChunksResponse | null;
   error: string | null;
+  embed: EmbedState;
 };
 
 export default function ChunksTab() {
@@ -102,11 +116,18 @@ export default function ChunksTab() {
       ...selectedConfigs.map((c) => fetchChunks(docId, c.id)),
     ]);
 
-    const results: ColumnResult[] = chunkOutcomes.map((outcome, i) => ({
-      config: selectedConfigs[i],
-      data: outcome.status === "fulfilled" ? outcome.value : null,
-      error: outcome.status === "rejected" ? (outcome.reason as Error).message : null,
-    }));
+    const results: ColumnResult[] = chunkOutcomes.map((outcome, i) => {
+      const data = outcome.status === "fulfilled" ? outcome.value : null;
+      const error = outcome.status === "rejected" ? (outcome.reason as Error).message : null;
+      // Already-embedded pairs come back with embedded_count == total_chunks;
+      // start them in the success state so the column shows "✓ embedded"
+      // immediately rather than re-prompting a build.
+      const embed: EmbedState =
+        data && data.total_chunks > 0 && data.embedded_count === data.total_chunks
+          ? { status: "success" }
+          : { status: "idle" };
+      return { config: selectedConfigs[i], data, error, embed };
+    });
 
     setColumns(results);
     if (docOutcome.status === "fulfilled") {
@@ -116,6 +137,26 @@ export default function ChunksTab() {
       setHighlightConfigId(firstOk ? firstOk.config.id : null);
     }
     setLoading(false);
+  }
+
+  /**
+   * Trigger embedding for one column. Updates only that column's embed
+   * state — the others stay untouched, so two builds can run in parallel
+   * if the user clicks both.
+   */
+  async function handleBuild(configId: number, documentId: number): Promise<void> {
+    const setEmbed = (next: EmbedState): void =>
+      setColumns((prev) =>
+        prev.map((c) => (c.config.id === configId ? { ...c, embed: next } : c)),
+      );
+
+    setEmbed({ status: "loading" });
+    try {
+      await buildEmbeddings(documentId, configId);
+      setEmbed({ status: "success" });
+    } catch (e) {
+      setEmbed({ status: "error", error: (e as Error).message });
+    }
   }
 
   const canLoad = docId != null && configIds.length > 0 && !loading;
@@ -176,7 +217,9 @@ export default function ChunksTab() {
 
       {/* Results area ------------------------------------------------------ */}
       {loading && <LoadingSkeleton columnCount={configIds.length} />}
-      {!loading && columns.length > 0 && <ColumnsGrid columns={columns} />}
+      {!loading && columns.length > 0 && (
+        <ColumnsGrid columns={columns} onBuild={handleBuild} />
+      )}
       {!loading && columns.length === 0 && !listsError && <EmptyState />}
 
       {!loading && sourceDoc && columns.some((c) => c.data != null) && (
@@ -297,7 +340,13 @@ function ConfigChecklist({
 // Results rendering
 // ---------------------------------------------------------------------------
 
-function ColumnsGrid({ columns }: { columns: ColumnResult[] }) {
+function ColumnsGrid({
+  columns,
+  onBuild,
+}: {
+  columns: ColumnResult[];
+  onBuild: (configId: number, documentId: number) => void;
+}) {
   // Explicit per-count classes keep Tailwind's JIT happy (it won't generate
   // classes from interpolated strings like `grid-cols-${n}`).
   const gridCls =
@@ -310,14 +359,20 @@ function ColumnsGrid({ columns }: { columns: ColumnResult[] }) {
   return (
     <div className={`grid ${gridCls} gap-4`}>
       {columns.map((col) => (
-        <ChunksColumn key={col.config.id} column={col} />
+        <ChunksColumn key={col.config.id} column={col} onBuild={onBuild} />
       ))}
     </div>
   );
 }
 
-function ChunksColumn({ column }: { column: ColumnResult }) {
-  const { config, data, error } = column;
+function ChunksColumn({
+  column,
+  onBuild,
+}: {
+  column: ColumnResult;
+  onBuild: (configId: number, documentId: number) => void;
+}) {
+  const { config, data, error, embed } = column;
   return (
     <div className="rounded-md border border-gray-200 bg-white overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
@@ -332,6 +387,14 @@ function ChunksColumn({ column }: { column: ColumnResult }) {
             <b className="text-gray-900">{data.total_chunks}</b> chunks · avg{" "}
             <b className="text-gray-900">{data.avg_char_count}</b> chars
           </p>
+        )}
+        {data && data.total_chunks > 0 && (
+          <div className="mt-2">
+            <EmbedActionRow
+              embed={embed}
+              onBuild={() => onBuild(config.id, data.document_id)}
+            />
+          </div>
         )}
       </div>
 
@@ -356,6 +419,69 @@ function ChunksColumn({ column }: { column: ColumnResult }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Per-column embed action area.
+ *
+ * Renders one of four mutually-exclusive UI states based on the
+ * EmbedState discriminated union. The build/rebuild buttons are the
+ * only thing that calls into onBuild — the parent owns everything else.
+ */
+function EmbedActionRow({
+  embed,
+  onBuild,
+}: {
+  embed: EmbedState;
+  onBuild: () => void;
+}) {
+  switch (embed.status) {
+    case "idle":
+      return (
+        <button
+          onClick={onBuild}
+          className="rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+        >
+          Build embeddings
+        </button>
+      );
+
+    case "loading":
+      return (
+        <span className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+          <span className="inline-block h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+          embedding…
+        </span>
+      );
+
+    case "success":
+      return (
+        <span className="inline-flex items-center gap-2 text-xs">
+          <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 font-medium text-green-700">
+            <span aria-hidden>✓</span> embedded
+          </span>
+          <button
+            onClick={onBuild}
+            className="text-gray-500 hover:text-gray-900 underline"
+          >
+            rebuild
+          </button>
+        </span>
+      );
+
+    case "error":
+      return (
+        <div className="space-y-1">
+          <p className="text-xs text-red-700">Embed failed: {embed.error}</p>
+          <button
+            onClick={onBuild}
+            className="rounded border border-red-300 bg-white px-2 py-0.5 text-xs text-red-700 hover:bg-red-50"
+          >
+            Retry
+          </button>
+        </div>
+      );
+  }
 }
 
 function ChunkRow({ chunk }: { chunk: Chunk }) {

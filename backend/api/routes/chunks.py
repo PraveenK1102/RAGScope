@@ -51,6 +51,7 @@ class ChunksResponse(BaseModel):
     strategy_used: str
     total_chunks: int
     avg_char_count: float
+    embedded_count: int  # how many chunks already have non-NULL embedding bytes
     chunks: list[ChunkRead]
 
 
@@ -125,12 +126,14 @@ def get_chunks(
     # 3. Build response with aggregate stats
     total = len(cached)
     avg = (sum(len(c.content) for c in cached) / total) if total else 0.0
+    embedded = sum(1 for c in cached if c.embedding is not None)
     return ChunksResponse(
         document_id=document_id,
         config_id=config_id,
         strategy_used=config.chunk_strategy.value,
         total_chunks=total,
         avg_char_count=round(avg, 2),
+        embedded_count=embedded,
         chunks=[
             ChunkRead(
                 chunk_index=c.chunk_index,

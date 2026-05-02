@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import chunks as chunks_routes
 from backend.api.routes import configs as configs_routes
 from backend.api.routes import documents as documents_routes
+from backend.api.routes import embeddings as embeddings_routes
 from backend.db import models  # noqa: F401 — import for side-effect: registers models with Base.metadata
 from backend.db.database import Base, engine
 
@@ -56,6 +57,7 @@ app.add_middleware(
 app.include_router(documents_routes.router)
 app.include_router(configs_routes.router)
 app.include_router(chunks_routes.router)
+app.include_router(embeddings_routes.router)
 
 
 @app.get("/health")

@@ -248,20 +248,192 @@ up to three configs on the same document.
 
 ---
 
-## Week 3 — Embedder + vector store 🔜
+## Week 3 — Embedder + vector store ✅
 
-**Goal:** Embed chunks and persist them to a vector store, with two model
-options (Ollama nomic-embed-text, all-MiniLM-L6-v2).
+**Goal:** Embed every chunk of a (document, config) pair under the config's
+embedding model, persist the vectors to ChromaDB, cache the raw bytes back
+onto `chunks.embedding`, and expose a "Build embeddings" action per column
+in the Chunks tab. Two model backends: MiniLM (local sentence-transformers,
+384-dim) and nomic-embed-text via Ollama (768-dim).
 
-**Claude scaffolds:** Chroma setup, `POST /api/embeddings/build` route,
-frontend progress indicator.
+### Backend deliverables
 
-**I write by hand:** `core/embedder.py` with two backends, upsert into
-Chroma, handling dimension mismatch between models.
+- **`backend/core/embedder.py`** (hand-written) — embedding engine.
+  - `BaseEmbedder` abstract base with `model_id: ClassVar[str]`,
+    `dimension: ClassVar[int]`, abstract `embed(texts) -> list[list[float]]`.
+    Contract: order-preserving, batch in / batch out, empty-input
+    short-circuits without calling the backend.
+  - `MiniLMEmbedder` — wraps `SentenceTransformer("all-MiniLM-L6-v2")`.
+    Loads once in `__init__`; `embed` calls `.encode(texts).tolist()` so
+    the NumPy ndarray never crosses the module boundary.
+  - `OllamaEmbedder` — uses the `ollama` Python SDK. Translates our
+    internal enum value (`"ollama-nomic-embed-text"`) to the actual
+    Ollama model name (`"nomic-embed-text"`) via a class constant.
+    Catches `ConnectionError` and `ollama.ResponseError`, re-raises
+    them as `EmbedderUnavailable` so the route can map to 503 with a
+    helpful message ("is Ollama running?", "did you `ollama pull`?").
+  - `_INSTANCES: dict[EmbeddingModel, BaseEmbedder]` module-level cache.
+    `get_embedder()` constructs lazily on first hit; subsequent calls
+    return the same instance. One cached instance per model per process.
+- **`backend/core/vector_store.py`** — ChromaDB wrapper. Single point
+  of contact between the rest of the codebase and Chroma.
+  - Lazy module-level persistent client at `./chroma_db/` (gitignored).
+  - `get_collection(config_id)` — get-or-create with
+    `metadata={"hnsw:space": "cosine"}`.
+  - `upsert_chunks(config_id, chunks, embeddings)` — id keyed on
+    `str(chunk.id)`, document = chunk content, metadata =
+    `{document_id, config_id, chunk_index, start_char, end_char}`.
+    Idempotent — re-runs overwrite rather than duplicate.
+  - `Chunk` import lives under `if TYPE_CHECKING:` to keep the door
+    closed against future circular imports.
+- **`backend/api/routes/embeddings.py`** — single endpoint
+  `POST /api/embeddings/{document_id}/{config_id}/build`.
+  - 404 if doc/config don't exist (validated up front).
+  - 409 if no chunks exist for the pair (Chunks tab must materialise
+    them first; we don't auto-chain so the failure mode stays
+    attributable).
+  - 503 if `EmbedderUnavailable` propagates (Ollama down, model not
+    pulled).
+  - 400 on factory `ValueError` (defensive — only fires if a future
+    enum member is added without updating the dispatch).
+  - Orchestration glue (hand-written): `get_embedder(cfg.embedding_model)
+    → embed(batch) → write bytes to chunks.embedding → db.commit() →
+    upsert_chunks()`. Commit-before-upsert chosen on review: if Chroma
+    fails after the commit, SQLite is still consistent and the next
+    attempt retries cleanly.
+  - `_vector_to_bytes` / `_bytes_to_vector` helpers — float32 packing
+    via stdlib `struct`. 4 bytes/float; dim inferred as
+    `len(bytes) // 4`. Decoder isn't used in Week 3; kept for Week 4's
+    rebuild-Chroma-from-cache path.
+- **`backend/api/routes/chunks.py`** — `ChunksResponse.embedded_count: int`
+  added so the chunk viewer can show "✓ embedded" status without an
+  extra request.
+- **`backend/main.py`** — `embeddings_routes.router` mounted alongside
+  documents/configs/chunks.
+
+### Frontend deliverables
+
+- **`frontend/src/api/client.ts`** — added `embedded_count: number` on
+  `ChunksResponse`, the `BuildEmbeddingsResponse` type, and
+  `buildEmbeddings(documentId, configId)` POST helper with the standard
+  error-mapping path.
+- **`frontend/src/components/ChunksTab.tsx`** — per-column embed action.
+  - `EmbedState` discriminated union: `idle | loading | success | error`.
+    Exhaustive switch in `EmbedActionRow` rules out impossible-state
+    bugs at compile time (e.g. "loading but also has error").
+  - `ColumnResult` extended with `embed: EmbedState`. Initial state on
+    chunks-load: `success` if `embedded_count === total_chunks > 0`
+    (already-built pairs render correctly across reloads), else `idle`.
+  - `handleBuild(configId, documentId)` mutates only the matching
+    column's embed slice — two columns can build in parallel without
+    interfering.
+  - `EmbedActionRow` renders the four states: blue "Build embeddings"
+    button, pulsing-dot loading indicator, green ✓ pill + "rebuild"
+    link, or red error message + retry button.
+
+### Key decisions
+
+- **One Chroma collection per `Config.id`.** Each config pins one
+  embedding model → one fixed dimension → one collection. Naturally
+  satisfies Chroma's "one dimension per collection" rule with no
+  bookkeeping. Names are stable (`f"config_{id}"`) so re-runs always
+  hit the same collection.
+- **Persistent Chroma client at `./chroma_db/`.** Gitignored. Survives
+  uvicorn restarts; Week 4 retrieval can rely on it being there.
+- **Lazy POST endpoint, no auto-chain.** If a pair has no chunks,
+  return 409 instead of silently calling the chunker. Keeps error
+  attribution clear: if embedding fails it's an embedder problem,
+  not a chunker problem hidden inside an embedding call.
+- **Cache embedding bytes in `chunks.embedding`.** Chroma is the source
+  of truth for retrieval; SQLite is the durable backup. If `chroma_db/`
+  is wiped or corrupted we can rebuild from SQLite without re-running
+  the embedder (which is the slow part).
+- **Synchronous POST + spinner.** MiniLM is sub-second after warm-up;
+  Ollama similar. SSE would buy nothing today; revisit if any single
+  build ever feels slow.
+- **Fail Ollama lazily, not at startup.** Server boots whether or not
+  Ollama is running. 503 only fires when something actually tries to
+  use it — keeps dev-iteration cheap when working purely in MiniLM.
+- **Module-level `_INSTANCES` cache for embedders.** One instance per
+  model per process; MiniLM weights load ~2s on first request, instant
+  after. Multi-worker setups would have one cache per worker — fine
+  for this scale.
+- **Cosine over L2.** Sentence embedders encode meaning in *direction*;
+  L2 would over-weight magnitude and score same-meaning-different-length
+  sentences as less similar than they are. Set via
+  `metadata={"hnsw:space": "cosine"}` on collection creation.
+- **`db.commit()` before `upsert_chunks()`.** Originally written the
+  other way; flipped on review. If Chroma fails after the commit,
+  SQLite is still consistent and a retry just runs again. The reverse
+  ordering had a small window where Chroma had vectors that SQLite
+  didn't.
+- **`str(chunk.id)` as the Chroma row id.** Combined with `upsert`,
+  re-running the build for a (doc, cfg) pair overwrites in place
+  rather than duplicating. Idempotency falls out of the data model.
+- **float32 over float64 in the cache.** 4 bytes/float instead of 8 —
+  halves storage with no measurable retrieval impact.
+- **`embedded_count` on `ChunksResponse`, not a separate GET.** When
+  the UI loads chunks it already has the answer to "is this embedded
+  yet?" — no follow-up request needed.
+- **Unified embed action inside `ChunksTab`, not a separate tab.**
+  Same data, same selectors, same column layout — extending the
+  existing tab keeps the workflow continuous (chunk → embed).
+- **`EmbedState` as a discriminated union.** TypeScript's exhaustive
+  switch protection makes inconsistent states structurally impossible.
+
+### What I learned
+
+- **Embeddings as geometry.** A vector isn't just "a thing the model
+  emits" — it's a specific point in a high-dim space where meaning is
+  encoded as direction. Same meaning → similar direction → high cosine.
+- **Model-specific geometry.** Different models live in different
+  spaces; their vectors aren't comparable. "Pin one model per config"
+  isn't bureaucracy, it's correctness — proven by direct experiment
+  below.
+- **Embedded chunks with Ollama, queried with MiniLM by mistake.**
+  Hand-rolled `cosine()` happily ran because Python's `zip()` truncates
+  silently; results were near-zero noise (the literal substring of a
+  chunk scored 0.002 against that chunk). Chroma's `col.query()`
+  would have refused with `InvalidDimensionException`. Concrete proof
+  of why the higher-level API is more defensive than DIY math.
+- **Models calibrate cosine differently.** Same chunks via Nomic vs
+  MiniLM produce different absolute scores; Nomic compresses the
+  angular range so even unrelated text scores ~0.45. The discriminating
+  signal is *relative ranking*, not absolute thresholds. Cross-model
+  threshold heuristics don't transfer — eval (Week 7) is what tells you
+  which model is actually better for your data.
+- **NumPy ndarray vs `list[list[float]]`.** ndarrays are the typed,
+  contiguous, fast representation models emit; lists are the
+  JSON-serialisable, dep-free representation we expose. `.tolist()`
+  is the boundary.
+- **Bytes is a storage shape; floats is a compute shape.** Same numbers,
+  different container. `struct.pack` and `struct.unpack` round-trip
+  with no information loss (modulo float32 quantisation).
+- **HuggingFace caching.** First load downloads ~90MB into
+  `~/.cache/huggingface/`; every later load on this machine is
+  filesystem-only. Same idea as pip wheels or npm packages.
+- **Ollama as a separate process.** Runs its own HTTP server on
+  `localhost:11434`; we don't load weights into our process. Different
+  failure modes (process not running vs model not pulled) surface as
+  different exception types.
+- **Module-level state and process lifecycle.** `_INSTANCES` lives as
+  long as the process; one cached instance per model. `--reload`
+  resets it (worker replaced); `--workers N` gives N independent
+  caches.
+- **ChromaDB collection design.** Collection per config + cosine
+  distance + `str(chunk.id)` as the row id encodes the whole "one
+  bucket per pipeline that re-runs cleanly" pattern in three small
+  decisions.
+- **TypeScript discriminated unions for UI state.** Modelling four
+  mutually-exclusive UI states as four union members + an exhaustive
+  switch makes adding a fifth state a type error in every consumer
+  until you handle it.
+- **`if TYPE_CHECKING:` import.** Type-only imports at zero runtime
+  cost — avoids circular-import risk for the same files.
 
 ---
 
-## Week 4 — Retriever + generator ⬜
+## Week 4 — Retriever + generator 🔜
 
 **Goal:** End-to-end query flow — question in, grounded answer out.
 
