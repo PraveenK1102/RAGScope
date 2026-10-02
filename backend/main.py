@@ -7,6 +7,13 @@ Run locally from the repo root:
 OpenAPI docs will be at http://localhost:8000/docs
 """
 
+# Load .env BEFORE importing any backend module that reads os.environ
+# (Gemini SDK in core/generator.py, etc.). dotenv is a no-op if .env
+# is missing, so this is safe in environments where vars come from the
+# real shell instead.
+from dotenv import load_dotenv
+load_dotenv()
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 

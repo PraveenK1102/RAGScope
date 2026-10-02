@@ -17,8 +17,11 @@ sentence-transformers      # local MiniLM model (used by HuggingFaceEmbeddings)
 chromadb                   # local persistent vector DB
 ollama                     # thin Python client for the local Ollama HTTP server
 
+# Week 4: retriever + generator
+google-generativeai        # Gemini API client
+
 # Later weeks will add:
-#   Week 4: google-generativeai, requests  (Gemini + Grok)
+#   Week 4 stretch: requests  (Grok)
 #   Week 6: rank_bm25
 #   Week 7: ragas, datasets
 #   Week 8: langgraph, langchain

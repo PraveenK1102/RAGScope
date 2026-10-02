@@ -17,6 +17,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Enum as SAEnum,
@@ -52,6 +53,17 @@ class RetrievalMode(StrEnum):
     VECTOR = "vector"   # pure vector similarity (default)
     BM25 = "bm25"       # lexical search only
     HYBRID = "hybrid"   # weighted merge of vector + BM25
+
+
+class LLMModel(StrEnum):
+    """LLM the generator calls to produce the final answer.
+
+    Each member's value is the model id the underlying SDK expects:
+        - GEMINI_FLASH -> google-generativeai's `gemini-1.5-flash`
+    Future members will add Grok (xAI) and an Ollama-served local LLM.
+    """
+
+    GEMINI_FLASH = "gemini-1.5-flash"   # Google, free tier, fast
 
 
 # A sensible default prompt template for Week 4+ generation. {context} and
@@ -122,6 +134,12 @@ class Config(Base):
     )
 
     # --- Generation (Week 4) ----------------------------------------------
+    llm_model: Mapped[LLMModel] = mapped_column(
+        SAEnum(LLMModel, name="llm_model_enum"),
+        nullable=False,
+        default=LLMModel.GEMINI_FLASH,
+        server_default=LLMModel.GEMINI_FLASH.value,
+    )
     prompt_template: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -170,4 +188,68 @@ class Chunk(Base):
         return (
             f"<Chunk id={self.id} doc={self.document_id} cfg={self.config_id} "
             f"idx={self.chunk_index} chars={self.start_char}-{self.end_char}>"
+        )
+
+
+class QueryTrace(Base):
+    """One persisted question + answer through the RAG pipeline.
+
+    Captures everything needed to debug, replay, or compare a query:
+    the question, which config answered, the chunks retrieved (with
+    distance scores), the prompt sent to the LLM, the raw LLM response,
+    the final answer, and end-to-end latency. Read-only audit data —
+    never updated after insert.
+
+    `llm_model` is denormalised onto the trace as a free-form string so
+    a future config deletion (or `llm_model` enum rename) doesn't lose
+    the historical "which model produced this answer" record.
+    """
+
+    __tablename__ = "query_traces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Which pipeline produced this answer. Indexed for the trace viewer
+    # ("show me all queries under config 7").
+    config_id: Mapped[int] = mapped_column(
+        ForeignKey("configs.id"), nullable=False, index=True
+    )
+
+    # The user's input.
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Top-K chunks retrieved, as a JSON list. Each item:
+    #   {chunk_id, content, distance, document_id, chunk_index,
+    #    start_char, end_char}
+    # SQLite stores JSON columns as TEXT; SQLAlchemy handles serialisation.
+    retrieved_chunks: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+
+    # The exact text sent to the LLM after prompt-template substitution.
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Which LLM was called. Stored as the raw model id string (e.g.
+    # "gemini-1.5-flash") so it survives schema changes.
+    llm_model: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    # Full untouched response from the LLM provider — useful for
+    # debugging when `answer` looks wrong but the model said something
+    # different upstream of any post-processing.
+    raw_response: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # The answer string we returned to the user (extracted from raw).
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # End-to-end timing in milliseconds (retrieve + generate + persist).
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<QueryTrace id={self.id} cfg={self.config_id} "
+            f"q={self.question[:30]!r}... lat={self.latency_ms}ms>"
         )

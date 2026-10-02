@@ -22,6 +22,7 @@ from backend.db.models import (
     ChunkStrategy,
     Config,
     EmbeddingModel,
+    LLMModel,
     RetrievalMode,
 )
 
@@ -40,6 +41,7 @@ class ConfigCreate(BaseModel):
     chunk_size: int = Field(gt=0, le=4096, description="Target characters per chunk")
     chunk_overlap: int = Field(ge=0, le=1024, description="Characters shared between neighbouring chunks")
     embedding_model: EmbeddingModel
+    llm_model: LLMModel = Field(default=LLMModel.GEMINI_FLASH, description="Which LLM to call for generation")
     top_k: int = Field(gt=0, le=100, default=5, description="How many chunks to retrieve per query")
 
     @model_validator(mode="after")
@@ -64,6 +66,7 @@ class ConfigRead(BaseModel):
     chunk_size: int
     chunk_overlap: int
     embedding_model: EmbeddingModel
+    llm_model: LLMModel
     top_k: int
     retrieval_mode: RetrievalMode
     reranking_enabled: bool
